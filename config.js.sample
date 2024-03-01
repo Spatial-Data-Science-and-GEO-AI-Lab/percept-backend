@@ -1,0 +1,14 @@
+// Name of the PostgreSQL database to use:
+const dbname = 'percept-dev';
+// Hostname (for TCP connections) or directory (for UNIX socket) of the database:
+const dbhost = '/var/run/postgresql';
+// Name of the PostgreSQL database to use for 'npm test' testsuite purposes only:
+const testdbname = 'percept-test';
+// Hostname (for TCP connections) or directory (for UNIX socket) of the testing database:
+const testdbhost = '/var/run/postgresql';
+
+
+// END OF CONFIGURATION
+
+// Export configuration:
+module.exports = {dbname, dbhost, testdbname, testdbhost, public_url};
