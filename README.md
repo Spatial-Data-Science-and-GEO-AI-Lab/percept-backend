@@ -58,3 +58,7 @@ Runs the app in production mode.
 ### `npm test`
 
 Runs the test suite on the test database (`testdbname` in `config.js`).
+
+# License
+
+This project is released under the GNU GPL v3.0. Please see COPYING for more details.
