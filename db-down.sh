@@ -1,4 +1,5 @@
 #!/bin/bash
+shopt -s globstar
 
 if [ -n "$1" ]; then
   kind="$1"
