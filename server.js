@@ -9,6 +9,7 @@ const DOMPurify = require('isomorphic-dompurify');
 const app = express();
 app.set('trust proxy', 'loopback');
 
+// Connect to the [test] database
 let pool;
 if (process.env.NODE_ENV === 'test') {
   pool = new Pool({database: testdbname, host: testdbhost});
@@ -29,6 +30,8 @@ const s = JSON.stringify;
 app.use(cors());
 app.use(express.json());
 
+// Insert a survey and person entry
+// Returns: new person_id
 async function create_new_person({age, monthly_gross_income, education, gender, country, postcode, consent}) {
   const c = await pool.connect();
   try {
@@ -52,6 +55,8 @@ async function create_new_person({age, monthly_gross_income, education, gender, 
   }
 }
 
+// Creates a new session for a given person_id, or reuses an existing session.
+// Returns: new or existing session_id
 async function create_or_retrieve_session(person_id) {
   const c = await pool.connect();
   try {
@@ -76,6 +81,9 @@ async function create_or_retrieve_session(person_id) {
   }
 }
 
+// Creates or returns a 'cookie hash', the string that can be stored in a cookie to represent a person_id on the browser-side.
+// This also keeps track of which user agent the user is using (for debugging)
+// Returns: new or existing cookie_hash
 async function get_cookie_hash(req, person_id) {
   const c = await pool.connect();
   const ip = req.ip;
@@ -100,6 +108,8 @@ async function get_cookie_hash(req, person_id) {
   }
 }
 
+// Finds a person_id based on either the session_id or the cookie_hash
+// Returns: person_id
 async function get_person_from_session(session_id, cookie_hash=null) {
   while(session_id) {
     const { rows } = await pool.query('SELECT person_id FROM session WHERE session_id=$1',[session_id]);
@@ -121,12 +131,17 @@ async function get_person_from_session(session_id, cookie_hash=null) {
   return null;
 }
 
+// Checks if the cookie_hash goes with the given session_id
+// Returns: true iff they match the database records
 async function check_cookie_hash({session_id, cookie_hash}) {
   //debuglog(`check_cookie_hash(${session_id},${cookie_hash})`);
   const { rows } = await pool.query("SELECT person_id FROM session JOIN cookie USING (person_id) WHERE session_id = $1 AND cookie_hash = decode($2,'base64')", [session_id, cookie_hash]);
   return (rows.length !== 0);
 }
 
+// Insert a newly submitted rating into the database, from a given session, using the image_id, category_id and the numerical rating (1 to 5).
+// This also keeps track of which user agent the user is using (for debugging)
+// Returns: the associated timestamp with the new row creation.
 async function create_new_rating(req, {session_id, image_id, category_id, rating}) {
   const c = await pool.connect();
   const ip = req.ip;
@@ -136,6 +151,7 @@ async function create_new_rating(req, {session_id, image_id, category_id, rating
     await c.query('INSERT INTO useragent (useragent_id, useragent_str) VALUES (md5($1)::uuid,$2) ON CONFLICT DO NOTHING', [ua, ua]);
     const qtxt = 'INSERT INTO rating (session_id, image_id, category_id, rating, useragent_id, ipaddr) VALUES ($1, $2, $3, $4, md5($5)::uuid, $6) RETURNING rating_id, ts';
     const { rows: [{ rating_id, ts }] } = await c.query(qtxt, [session_id, image_id, category_id, rating, ua, ip]);
+    // Track the most recent rating (per session) for possible undo operation. We intentionally only collect a single level of undo information.
     await c.query('INSERT into undoable (session_id, rating_id) VALUES ($1, $2) ON CONFLICT (session_id) DO UPDATE SET rating_id=$3 WHERE undoable.session_id=$4', [session_id, rating_id, rating_id, session_id]);
     await c.query('COMMIT');
     debuglog(`create_new_rating(${ip}, ${ua}, ${session_id}, ${image_id}, ${category_id}, ${rating}) => {rating_id: ${rating_id}, ts: ${ts}}`);
@@ -150,6 +166,8 @@ async function create_new_rating(req, {session_id, image_id, category_id, rating
   return null;
 }
 
+// Count the number of ratings that a particular session has performed, per category.
+// Returns: a dict, { category_counts: counts } where counts is an array, counts[<category_id>] = <number of ratings in that category>
 async function count_ratings_by_category({session_id}) {
   const res = await pool.query('SELECT category_id, count(*) FROM rating WHERE session_id = $1 GROUP BY category_id', [session_id]);
   let counts = {};
@@ -159,6 +177,7 @@ async function count_ratings_by_category({session_id}) {
   return { category_counts: counts };
 }
 
+// Returns: the overall count of ratings for a given session.
 async function count_ratings({session_id}) {
   const res = await pool.query('SELECT count(*) FROM rating WHERE session_id = $1', [session_id]);
   if (res.rows.length === 0)
@@ -167,6 +186,8 @@ async function count_ratings({session_id}) {
   return parseInt(count);
 }
 
+// Undos the most recent rating for a given session, based on the undoable table.
+// Returns: timestamp of the undone rating
 async function undo_last_rating({session_id}) {
   const c = await pool.connect();
   try {
@@ -194,6 +215,8 @@ async function undo_last_rating({session_id}) {
   return null;
 }
 
+// API: /new
+// Inserts a new rating into the database
 router.post('/new',
   body('session_id').isNumeric({no_symbols: true}).withMessage('Session ID must be a number'),
   body('image_id').isNumeric({no_symbols: true}).withMessage('Image ID must be a number'),
@@ -204,27 +227,34 @@ async (req, res) => {
   const errors = validationResult(req);
   let ts;
   if (!errors.isEmpty()) {
+    // Failure
     debuglog(`new(${s(req.body)}) => { errors: ${s(errors.array())} }`);
     return res.status(400).json({ errors: errors.array().map((e) => e.msg) });
   }
   req.body.cookie_hash = req.body.cookie_hash ? clean(req.body.cookie_hash) : null;
   if (!await check_cookie_hash(req.body))
+    // Failure
     return res.status(400).json({ errors: ['invalid authentication or session_id not present'] });
 
   try {
     ts = await create_new_rating(req, req.body);
   } catch(e) {
+    // Failure
     debuglog(`new(${s(req.body)}) => { errors: [${s(e)}] }`);
     return res.status(400).json({ errors: [e.detail] });
   }
 
   if (ts)
+    // Success
     res.json({status: 'ok', timestamp: ts, session_rating_count: await count_ratings(req.body),
               ...await count_ratings_by_category(req.body)});
   else
+    // Failure
     res.status(400).json({ errors: ['new rating creation failed'] });
 });
 
+// API: /undo
+// Invokes the undo functionality to remove the most recent rating from the database
 router.post('/undo',
   body('session_id').isNumeric({no_symbols: true}).withMessage('Session ID must be a number'),
   body('cookie_hash').isLength(40).withMessage('invalid length for cookie_hash'),
@@ -232,38 +262,48 @@ async (req, res) => {
   const errors = validationResult(req);
   let ts;
   if (!errors.isEmpty()) {
+    // Failure
     debuglog(`undo(${s(req.body)}) => { errors: ${s(errors.array())} }`);
     return res.status(400).json({ errors: errors.array().map((e) => e.msg) });
   }
   req.body.cookie_hash = req.body.cookie_hash ? clean(req.body.cookie_hash) : null;
   if (!await check_cookie_hash(req.body))
+    // Failure
     return res.status(400).json({ errors: ['invalid authentication or session_id not present'] });
 
   try {
     ts = await undo_last_rating(req.body);
   } catch(e) {
+    // Failure
     debuglog(`undo(${s(req.body)}) => { errors: [${s(e)}] }`);
     return res.status(400).json({ errors: [e.detail] });
   }
 
   if (ts)
+    // Success
     res.json({status: 'ok', timestamp: ts, ...await count_ratings_by_category(req.body)});
   else
+    // Failure
     res.status(400).json({ errors: ['undo failed'] });
 });
 
+// API: /fetch
+// Returns a selection of not-yet-rated images (cityname, url, image_id) (right now it only returns 1 at a time)
 router.all('/fetch',
   body('session_id').isNumeric({no_symbols: true}).withMessage('Session ID must be a number'),
 async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     debuglog(`fetch(${s(req.body)}) => { errors: ${s(errors.array())} }`);
+    // Failure
     return res.status(400).json({ errors: errors.array().map((e) => e.msg) });
   }
   const { rows } = await pool.query('SELECT cityname,url,image_id FROM image WHERE enabled IS true AND image_id NOT IN (SELECT image_id FROM rating WHERE session_id = $1) ORDER BY random() LIMIT 1', [req.body.session_id]);
+  // Success
   return res.json({ main_image: rows[0] });
 });
 
+// Returns: an array avgs, where avgs[<category_id>] = <average rating in that category for the given session>
 async function get_category_averages({session_id}) {
   const { rows } = await pool.query('SELECT category_id, avg(rating) AS average FROM rating WHERE session_id = $1 GROUP BY category_id', [session_id]);
   let avgs = {};
@@ -275,6 +315,7 @@ async function get_category_averages({session_id}) {
   return avgs;
 }
 
+// Returns: a dict with keys minImages, maxImages, where (min/max)Images = an array of dicts {url, rating, category_id} containing an image with the min/max rating per category_id. Ergo, for each category there is an entry showing the worst/best rated image by a particular user.
 async function get_minmax_images({session_id}) {
   const qMin = `SELECT * FROM (SELECT url, rating, category_id, ROW_NUMBER () OVER (PARTITION BY category_id ORDER BY rating) rn FROM rating JOIN image USING (image_id) WHERE session_id = $1) q WHERE rn = 1`;
   const qMax = `SELECT * FROM (SELECT url, rating, category_id, ROW_NUMBER () OVER (PARTITION BY category_id ORDER BY rating DESC) rn FROM rating JOIN image USING (image_id) WHERE session_id = $1) q WHERE rn = 1`;
@@ -292,41 +333,55 @@ async function get_minmax_images({session_id}) {
   return { minImages, maxImages };
 }
 
+// API: /getstats
+// Obtaining statistics about the session (the particular survey participant)
 router.all('/getstats',
   body('session_id').isNumeric({no_symbols: true}).withMessage('Session ID must be a number'),
 async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     debuglog(`getstats(${s(req.body)}) => { errors: ${s(errors.array())} }`);
+    // Failure
     return res.status(400).json({ errors: errors.array().map((e) => e.msg) });
   }
   const avgs = await get_category_averages(req.body);
   const json = { averages: avgs, ...await get_minmax_images(req.body) }
-  //debuglog(`getstats(${s(req.body)}) => ${s(json)}`);
+  debuglog(`getstats(${s(req.body)}) => ${s(json)}`);
+  // Success
   return res.json(json);
 });
 
+// API: /getcategories (deprecated)
 router.all('/getcategories',
   body('langabbr').optional({ checkFalsy: true }).isNumeric({no_symbols: true}).withMessage('langabbr must be a 2-letter language abbreviation'),
 async (req, res) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  if (!errors.isEmpty())
+    // Failure
+    return res.status(400).json({ errors: errors.array() });
   const langabbr = req.body.langabbr ?? 'en';
   const { rows } = await pool.query('SELECT t1.v AS shortname, t2.v AS description, category_id FROM category JOIN translation t1 ON (shortname_sid = t1.string_id AND t1.langabbr = $1) JOIN translation t2 ON (description_sid = t2.string_id AND t2.langabbr = $2) ORDER BY category_id', [langabbr, langabbr]);
+  // Success
   res.json({ categories: rows });
 });
 
+// API: /countratingsbycategory
+// See count_ratings_by_category()
 router.all('/countratingsbycategory',
   body('session_id').isNumeric({no_symbols: true}).withMessage('Session ID must be a number'),
 async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     debuglog(`fetch(${s(req.body)}) => { errors: ${s(errors.array())} }`);
+    // Failure
     return res.status(400).json({ errors: errors.array().map((e) => e.msg) });
   }
+  // Success
   res.json(await count_ratings_by_category(req.body));
 });
 
+// API: /newperson
+// Given a filled-out survey, create a new person row in the database
 router.post(
   '/newperson',
   body('age').isNumeric({no_symbols: true}).withMessage('Age must be a number'),
@@ -335,7 +390,9 @@ router.post(
 async (req, res) => {
   
   const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  if (!errors.isEmpty())
+    // Failure
+    return res.status(400).json({ errors: errors.array() });
 
   const args = {
     age: req.body.age,
@@ -356,15 +413,20 @@ async (req, res) => {
     cookie_hash_urlencoded: encodeURIComponent(cookie_hash)
   };
   debuglog(`newperson(${s(args)}) => ${s(ret)} (${s({person_id: person_id})})`);
+  // Success
   res.json(ret);
 });
 
+// API: /getsession
+// Given either session_id or cookie_hash, ensure that both values are obtained and returned.
 router.post('/getsession',
   body('session_id').optional({ checkFalsy: true }).isNumeric({no_symbols: true}).withMessage('session_id must be a number'),
   body('cookie_hash').optional({ checkFalsy: true }).isLength(40).withMessage('invalid length for cookie_hash'),
 async (req, res) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  if (!errors.isEmpty())
+    // Failure
+    return res.status(400).json({ errors: errors.array() });
 
   const cookie_hash = req.body.cookie_hash ? clean(req.body.cookie_hash) : null;
   let session_id = req.body.session_id;
@@ -377,6 +439,7 @@ async (req, res) => {
   const ip = req.ip;
   const ua = req.get('User-Agent');
   debuglog(`getsession(${ip},${ua},${s({session_id: session_id, cookie_hash: cookie_hash})}) => ${s(ret)}`);
+  // Success
   res.json(ret);
 });
 
@@ -384,6 +447,7 @@ app.use('/api/v1',router);
 
 const port = 8000;
 
+// If running in the test environment:
 if (process.env.NODE_ENV !== 'test') {
   module.exports = app.listen(port, () => {
     console.log(`Server is running on port ${port}.`);

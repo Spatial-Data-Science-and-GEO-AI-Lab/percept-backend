@@ -1,0 +1,10 @@
+INSERT INTO image (cityname, enabled, url, system_path) VALUES ('CityName', true, 'http://testdomain.tld/00.jpg', '/var/www/html/img/00.jpg');
+INSERT INTO image (cityname, enabled, url, system_path) VALUES ('CityName', true, 'http://testdomain.tld/01.jpg', '/var/www/html/img/01.jpg');
+INSERT INTO image (cityname, enabled, url, system_path) VALUES ('CityName', true, 'http://testdomain.tld/02.jpg', '/var/www/html/img/02.jpg');
+INSERT INTO image (cityname, enabled, url, system_path) VALUES ('CityName', true, 'http://testdomain.tld/03.jpg', '/var/www/html/img/03.jpg');
+INSERT INTO image (cityname, enabled, url, system_path) VALUES ('CityName', true, 'http://testdomain.tld/04.jpg', '/var/www/html/img/04.jpg');
+INSERT INTO image (cityname, enabled, url, system_path) VALUES ('CityName', true, 'http://testdomain.tld/05.jpg', '/var/www/html/img/05.jpg');
+INSERT INTO image (cityname, enabled, url, system_path) VALUES ('CityName', true, 'http://testdomain.tld/06.jpg', '/var/www/html/img/06.jpg');
+INSERT INTO image (cityname, enabled, url, system_path) VALUES ('CityName', true, 'http://testdomain.tld/07.jpg', '/var/www/html/img/07.jpg');
+INSERT INTO image (cityname, enabled, url, system_path) VALUES ('CityName', true, 'http://testdomain.tld/08.jpg', '/var/www/html/img/08.jpg');
+INSERT INTO image (cityname, enabled, url, system_path) VALUES ('CityName', true, 'http://testdomain.tld/09.jpg', '/var/www/html/img/09.jpg');
